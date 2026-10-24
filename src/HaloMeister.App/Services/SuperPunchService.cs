@@ -12,6 +12,7 @@ public sealed class SuperPunchService
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly Dictionary<long, AccelerationSnapshot> _accelerationSnapshots = [];
     private int _processId;
+    private int _missionEpoch = -1;
 
     public static SuperPunchService Current { get; } = new();
     public bool IsActive => _accelerationSnapshots.Count > 0;
@@ -25,6 +26,8 @@ public sealed class SuperPunchService
 
         EnsureConnected();
         EnsureDefinitions();
+        if (!_memory.StillSameMission(ref _missionEpoch))
+            _accelerationSnapshots.Clear();
         if (_processId != _memory.ProcessId)
         {
             _accelerationSnapshots.Clear();
@@ -98,6 +101,11 @@ public sealed class SuperPunchService
         if (_accelerationSnapshots.Count == 0)
             return 0;
         EnsureConnected();
+        if (!_memory.StillSameMission(ref _missionEpoch))
+        {
+            _accelerationSnapshots.Clear();
+            return 0;
+        }
         if (_processId != _memory.ProcessId)
         {
             _accelerationSnapshots.Clear();

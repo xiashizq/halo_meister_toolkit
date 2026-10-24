@@ -27,6 +27,7 @@ public sealed class ProjectileSwapperService : IDisposable
     private readonly RuntimeTagMemoryService _memory = RuntimeTagMemoryService.Current;
     private readonly RuntimeTagDefinitionService _definitions = new();
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
 
     public int ProcessId => _memory.ProcessId;
 
@@ -50,14 +51,11 @@ public sealed class ProjectileSwapperService : IDisposable
 
     public void Swap(ProjectileSwapWeapon weapon, RuntimeTagEntry projectile)
     {
-        RuntimeTagEntry liveProjectile = _tags.FirstOrDefault(tag =>
-                tag.Index == projectile.Index &&
-                string.Equals(tag.Group, "proj", StringComparison.OrdinalIgnoreCase))
+        _tags = _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+        RuntimeTagEntry liveProjectile = RuntimeTagMemoryService.FindLoadedTag(_tags, projectile)
             ?? throw new InvalidOperationException(
                 "That projectile is no longer loaded. Refresh and choose it again.");
-        RuntimeTagEntry liveWeapon = _tags.FirstOrDefault(tag =>
-                tag.Index == weapon.Tag.Index &&
-                string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase))
+        RuntimeTagEntry liveWeapon = RuntimeTagMemoryService.FindLoadedTag(_tags, weapon.Tag)
             ?? throw new InvalidOperationException(
                 "That weapon is no longer loaded. Refresh and choose it again.");
 

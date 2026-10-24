@@ -22,14 +22,22 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private readonly List<MemorySnapshot> _originalVariants = [];
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
     private long _capturedPlayerNameAddress;
+    private int _snapshotEpoch = -1;
 
-    public bool CanRestore =>
-        _memory.IsConnected &&
-        _originalVariants.Count > 0 &&
-        _tags.Any(tag =>
-            tag.NameAddress == _capturedPlayerNameAddress &&
-            IsUsableBiped(tag));
+    public bool CanRestore
+    {
+        get
+        {
+            DropSnapshotIfMissionChanged();
+            return _memory.IsConnected &&
+                _originalVariants.Count > 0 &&
+                _tags.Any(tag =>
+                    tag.NameAddress == _capturedPlayerNameAddress &&
+                    IsUsableBiped(tag));
+        }
+    }
 
     public async Task<RuntimeArmorVariantResult> ApplyAsync(
         int variantIndex,
@@ -37,7 +45,8 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
     {
         EnsureReady();
         EnsureBridgeReady();
-        _tags = _memory.ReadTags();
+        DropSnapshotIfMissionChanged();
+        EnsureLiveTags();
 
         PlayerRepresentationLocation[] representations =
             FindPlayerRepresentations().ToArray();
@@ -71,6 +80,7 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
                     target.Variant.Address,
                     _memory.ReadBytes(target.Variant.Address, target.Variant.Size))));
             _capturedPlayerNameAddress = activePlayer.NameAddress;
+            _snapshotEpoch = _memory.TagEpoch;
         }
 
         var completed = new List<MemorySnapshot>();
@@ -118,7 +128,7 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
     {
         EnsureReady();
         EnsureBridgeReady();
-        _tags = _memory.ReadTags();
+        EnsureLiveTags();
 
         RuntimeTagEntry model = FindWeaponModel(segment);
         ModelVariantLocation selected = ReadModelVariant(model, variantIndex);
@@ -140,6 +150,7 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
 
     public async Task RestoreAsync(CancellationToken cancellationToken = default)
     {
+        DropSnapshotIfMissionChanged();
         if (!CanRestore)
             throw new InvalidOperationException(
                 "No compatible live armor snapshot is available to restore.");
@@ -157,6 +168,19 @@ public sealed class RuntimeCustomizationVariantService : IDisposable
         if (runtime.Outcome != ScriptOutcome.Confirmed)
             throw new BridgeFailureException(runtime.Message);
 
+        _originalVariants.Clear();
+        _capturedPlayerNameAddress = 0;
+    }
+
+    private void EnsureLiveTags()
+    {
+        _tags = _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+    }
+
+    private void DropSnapshotIfMissionChanged()
+    {
+        if (_memory.StillSameMission(ref _snapshotEpoch))
+            return;
         _originalVariants.Clear();
         _capturedPlayerNameAddress = 0;
     }

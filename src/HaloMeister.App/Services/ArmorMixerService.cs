@@ -268,6 +268,16 @@ public sealed class ArmorMixerService
         EnsureReady();
         EnsureBridgeReady();
         ArmorMixerSession session = ValidateSession();
+        RuntimeTagEntry? liveModel = RuntimeTagMemoryService.FindLoadedTag(
+            _memory.ReadTags(),
+            "hlmt",
+            session.ModelTag,
+            preferredIndex: -1);
+        if (liveModel is null || liveModel.NameAddress != session.ModelNameAddress)
+        {
+            throw new InvalidOperationException(
+                "The loaded mission changed after the scan. Refresh and try again.");
+        }
         ArmorMixerVariant liveBase = session.Variants.FirstOrDefault(
                 variant =>
                     variant.Index == baseVariant.Index &&

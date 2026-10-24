@@ -41,17 +41,25 @@ public sealed class PlayerBipedService : IDisposable
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private readonly PlayerToolsService _playerTools = new();
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
     private readonly List<AppliedMemorySnapshot> _tagPatch = [];
     private long _capturedGlobalsNameAddress;
+    private int _patchEpoch = -1;
     private int _warmedProcessId;
 
     public int ProcessId => _memory.ProcessId;
     public ScriptingBridgeStatus BridgeStatus => _bridge.GetStatus();
-    public bool CanRestore =>
-        _memory.IsConnected &&
-        _tagPatch.Count > 0 &&
-        _tags.Any(tag => tag.NameAddress == _capturedGlobalsNameAddress &&
-                         string.Equals(tag.Group, "matg", StringComparison.OrdinalIgnoreCase));
+    public bool CanRestore
+    {
+        get
+        {
+            DropPatchIfMissionChanged();
+            return _memory.IsConnected &&
+                _tagPatch.Count > 0 &&
+                _tags.Any(tag => tag.NameAddress == _capturedGlobalsNameAddress &&
+                                 string.Equals(tag.Group, "matg", StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     public PlayerBipedSession Connect()
     {
@@ -81,10 +89,12 @@ public sealed class PlayerBipedService : IDisposable
     {
         ScriptingBridgeStatus status = _bridge.GetStatus();
         status.EnsureRuntimeReady();
+        EnsureLiveTags();
 
-        RuntimeTagEntry target = _tags.FirstOrDefault(tag =>
-                tag.Index == choice.BipedTag.Index && IsUsableBiped(tag))
-            ?? throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
+        RuntimeTagEntry target = RuntimeTagMemoryService.FindLoadedTag(_tags, choice.BipedTag) is { } live &&
+                                 IsUsableBiped(live)
+            ? live
+            : throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
         uint datum = RuntimeTagMemoryService.BuildRuntimeDatum(target);
         ScriptExecutionResult result = await _bridge.ExecuteAsync(
             ScriptLanguage.BlamBipedPossess,
@@ -141,13 +151,15 @@ public sealed class PlayerBipedService : IDisposable
     public TagBipedPatchResult ApplyTagRedirect(PlayerBipedChoice choice)
     {
         EnsureTagPatchReady();
+        DropPatchIfMissionChanged();
         if (_tagPatch.Count > 0)
             throw new InvalidOperationException(L.Get("change_biped.error_redirect_already_active"));
 
-        _tags = _memory.ReadTags();
-        RuntimeTagEntry target = _tags.FirstOrDefault(tag =>
-                tag.Index == choice.BipedTag.Index && IsUsableBiped(tag))
-            ?? throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
+        EnsureLiveTags();
+        RuntimeTagEntry target = RuntimeTagMemoryService.FindLoadedTag(_tags, choice.BipedTag) is { } live &&
+                                 IsUsableBiped(live)
+            ? live
+            : throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
         RuntimeTagEntry globals = FindGlobalsMatg();
         PlayerRepresentationLocation representation = FindPlayerRepresentations(globals)
             .Select(location => (Location: location, Score: PlayerNameScore(location.Biped.Name) - location.ElementIndex))
@@ -171,6 +183,7 @@ public sealed class PlayerBipedService : IDisposable
             new RuntimeMemoryWrite(write.Address, write.OriginalBytes, write.AppliedBytes)));
         _tagPatch.AddRange(writes);
         _capturedGlobalsNameAddress = globals.NameAddress;
+        _patchEpoch = _memory.TagEpoch;
 
         uint variantId = BinaryPrimitives.ReadUInt32LittleEndian(variant);
         string variantName = _memory.TryGetStringIdName(variantId, out string? name)
@@ -181,6 +194,7 @@ public sealed class PlayerBipedService : IDisposable
 
     public void RestoreTagRedirect()
     {
+        DropPatchIfMissionChanged();
         if (!CanRestore)
             throw new InvalidOperationException(L.Get("change_biped.error_nothing_to_restore"));
 
@@ -209,12 +223,11 @@ public sealed class PlayerBipedService : IDisposable
     public IReadOnlyList<PlayerBipedVariantChoice> ReadVariants(PlayerBipedChoice choice)
     {
         EnsureTagPatchReady();
-        if (_tags.Count == 0 ||
-            !_tags.Any(tag => tag.Index == choice.BipedTag.Index && IsUsableBiped(tag)))
-            _tags = _memory.ReadTags();
-        RuntimeTagEntry target = _tags.FirstOrDefault(tag =>
-                tag.Index == choice.BipedTag.Index && IsUsableBiped(tag))
-            ?? throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
+        EnsureLiveTags();
+        RuntimeTagEntry target = RuntimeTagMemoryService.FindLoadedTag(_tags, choice.BipedTag) is { } live &&
+                                 IsUsableBiped(live)
+            ? live
+            : throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
 
         byte[] defaultBytes = ReadDefaultModelVariant(target);
         uint defaultId = BinaryPrimitives.ReadUInt32LittleEndian(defaultBytes);
@@ -268,10 +281,11 @@ public sealed class PlayerBipedService : IDisposable
         PlayerBipedVariantChoice? variantChoice = null)
     {
         EnsureTagPatchReady();
-        _tags = _memory.ReadTags();
-        RuntimeTagEntry target = _tags.FirstOrDefault(tag =>
-                tag.Index == choice.BipedTag.Index && IsUsableBiped(tag))
-            ?? throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
+        EnsureLiveTags();
+        RuntimeTagEntry target = RuntimeTagMemoryService.FindLoadedTag(_tags, choice.BipedTag) is { } live &&
+                                 IsUsableBiped(live)
+            ? live
+            : throw new InvalidOperationException(L.Get("change_biped.error_character_not_loaded"));
         RuntimeTagEntry globals = FindGlobalsMatg();
         (PlayerRepresentationLocation Location, RuntimeTagFieldValue Block) representation =
             FindPlayerRepresentationPatchTarget(globals);
@@ -583,6 +597,23 @@ public sealed class PlayerBipedService : IDisposable
     }
 
     public void Dispose() { }
+
+    private void EnsureLiveTags()
+    {
+        IReadOnlyList<RuntimeTagEntry> fresh =
+            _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+        if (ReferenceEquals(fresh, _tags))
+            return;
+        _tags = fresh;
+    }
+
+    private void DropPatchIfMissionChanged()
+    {
+        if (_memory.StillSameMission(ref _patchEpoch))
+            return;
+        _tagPatch.Clear();
+        _capturedGlobalsNameAddress = 0;
+    }
 
     private PlayerBipedSession BuildSession()
     {

@@ -61,6 +61,8 @@ public sealed partial class AllegianceDemoPage : Page, IActivatablePage
 
     public void OnActivated()
     {
+        _game.LiveWorldChanged -= OnLiveWorldChanged;
+        _game.LiveWorldChanged += OnLiveWorldChanged;
         UpdateControls();
         _statusTimer.Start();
         _hotkeyTimer.Start();
@@ -69,6 +71,7 @@ public sealed partial class AllegianceDemoPage : Page, IActivatablePage
 
     public void OnDeactivated()
     {
+        _game.LiveWorldChanged -= OnLiveWorldChanged;
         _statusTimer.Stop();
         _hotkeyTimer.Stop();
         _hotkeyWasDown = false;
@@ -651,6 +654,13 @@ public sealed partial class AllegianceDemoPage : Page, IActivatablePage
 
     private void OnConnectionChanged(object? sender, EventArgs e) =>
         DispatcherQueue.TryEnqueue(UpdateControls);
+
+    private void OnLiveWorldChanged(object? sender, EventArgs e) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _weaponChoiceCache.Clear();
+            UpdateControls();
+        });
 
     private void OnStatusTick(object? sender, object e) => UpdateControls();
 

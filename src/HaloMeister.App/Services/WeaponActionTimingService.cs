@@ -15,6 +15,7 @@ public sealed class WeaponActionTimingService
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly Dictionary<long, EventSnapshot> _snapshots = [];
     private int _processId;
+    private int _missionEpoch = -1;
 
     public static WeaponActionTimingService Current { get; } = new();
     public bool IsActive => _snapshots.Count > 0;
@@ -23,6 +24,8 @@ public sealed class WeaponActionTimingService
     {
         EnsureConnected();
         EnsureDefinitions();
+        if (!_memory.StillSameMission(ref _missionEpoch))
+            _snapshots.Clear();
         ResetForNewProcess();
 
         IReadOnlyList<RuntimeTagEntry> tags = _memory.ReadTags();
@@ -81,6 +84,11 @@ public sealed class WeaponActionTimingService
         if (_snapshots.Count == 0)
             return 0;
         EnsureConnected();
+        if (!_memory.StillSameMission(ref _missionEpoch))
+        {
+            _snapshots.Clear();
+            return 0;
+        }
         ResetForNewProcess();
 
         int restored = 0;

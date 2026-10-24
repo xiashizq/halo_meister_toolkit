@@ -156,6 +156,7 @@ public sealed class VehicleWorkshopService : IDisposable
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
     private int _warmedProcessId;
 
     public int ProcessId => _memory.ProcessId;
@@ -302,13 +303,9 @@ public sealed class VehicleWorkshopService : IDisposable
 
         // Move one-time native hook install off the first spawn click.
         await WarmUpAsync(cancellationToken);
+        EnsureLiveTags();
 
         RuntimeTagEntry? live = FindLive(selected);
-        if (live is null)
-        {
-            _tags = _memory.ReadTags();
-            live = FindLive(selected);
-        }
         if (live is null)
             throw new InvalidOperationException(L.Get("vehicle_workshop.error_tag_unloaded"));
         if (live.DataAddress <= 0 || live.RootCount <= 0)
@@ -759,11 +756,16 @@ public sealed class VehicleWorkshopService : IDisposable
 
     public void Dispose() { }
 
-    private RuntimeTagEntry? FindLive(LoadableVehicle selected) =>
-        _tags.FirstOrDefault(tag =>
-            tag.Index == selected.Tag.Index &&
-            string.Equals(tag.Group, "vehi", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(tag.Name, selected.Tag.Name, StringComparison.OrdinalIgnoreCase));
+    private void EnsureLiveTags()
+    {
+        _tags = _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+    }
+
+    private RuntimeTagEntry? FindLive(LoadableVehicle selected)
+    {
+        EnsureLiveTags();
+        return RuntimeTagMemoryService.FindLoadedTag(_tags, selected.Tag);
+    }
 
     private static IReadOnlyList<SeatPatchField> SelectDriverSeats(
         IReadOnlyList<SeatPatchField> seats,

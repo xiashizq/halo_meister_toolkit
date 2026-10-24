@@ -208,6 +208,7 @@ public sealed class EnemySpawnerService : IDisposable
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
     private int _warmedProcessId;
     private ScaffoldIndex? _scaffoldIndex;
 
@@ -221,7 +222,7 @@ public sealed class EnemySpawnerService : IDisposable
         if (!_memory.IsConnected)
             throw new InvalidOperationException(
                 "Connect to the game from the header first.");
-        _tags = _memory.ReadTags();
+        EnsureLiveTags();
         EnemySpawnChoice[] characters = _tags
             .Where(tag =>
                 string.Equals(tag.Group, "char", StringComparison.OrdinalIgnoreCase) &&
@@ -272,6 +273,11 @@ public sealed class EnemySpawnerService : IDisposable
                 "One native AI batch can contain between one and five actors.");
         if (campaignTeam is ushort team && team > 13)
             throw new ArgumentOutOfRangeException(nameof(campaignTeam));
+        EnsureLiveTags();
+        choice = RelinkCharacter(choice);
+        variant = RelinkVariant(choice, variant);
+        weapon = RelinkWeapon(weapon);
+        weaponVariant = RelinkWeaponVariant(weapon, weaponVariant);
         await WarmUpAsync(cancellationToken);
         WorldPoint playerPosition =
             await ReadPlayerPositionAsync(cancellationToken);
@@ -395,6 +401,8 @@ public sealed class EnemySpawnerService : IDisposable
         if (actors is < 1 or > 32)
             throw new ArgumentOutOfRangeException(nameof(groups));
 
+        EnsureLiveTags();
+        groups = groups.Select(RelinkGroup).ToArray();
         await WarmUpAsync(cancellationToken);
         WorldPoint playerPosition =
             await ReadPlayerPositionAsync(cancellationToken);
@@ -523,8 +531,7 @@ public sealed class EnemySpawnerService : IDisposable
     /// </summary>
     public SpawnScaffoldInventory ProbeScaffoldInventory()
     {
-        if (_tags.Count == 0)
-            _tags = _memory.ReadTags();
+        EnsureLiveTags();
         RuntimeTagEntry scenario = _tags.FirstOrDefault(tag =>
             string.Equals(tag.Group, "scnr", StringComparison.OrdinalIgnoreCase) &&
             tag.DataAddress > 0)
@@ -935,8 +942,7 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             return [];
-        if (_tags.Count == 0)
-            _tags = _memory.ReadTags();
+        EnsureLiveTags();
         try
         {
             WarmUpDefinitions();
@@ -946,11 +952,11 @@ public sealed class EnemySpawnerService : IDisposable
             return [];
         }
 
-        RuntimeTagEntry live = _tags.FirstOrDefault(tag =>
-                tag.Index == character.CharacterTag.Index &&
-                string.Equals(tag.Group, "char", StringComparison.OrdinalIgnoreCase) &&
-                tag.DataAddress > 0)
-            ?? character.CharacterTag;
+        RuntimeTagEntry? live = RuntimeTagMemoryService.FindLoadedTag(
+            _tags,
+            character.CharacterTag);
+        if (live is null)
+            return [];
         try
         {
             return ReadCompatibleWeapons(live);
@@ -969,7 +975,7 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             return [];
-        _tags = _memory.ReadTags();
+        EnsureLiveTags();
         return _tags
             .Where(tag =>
                 string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase) &&
@@ -996,14 +1002,13 @@ public sealed class EnemySpawnerService : IDisposable
         }
         if (!_definitions.HasSchema("weap") || !_definitions.HasSchema("hlmt"))
             return [];
-        if (_tags.Count == 0)
-            _tags = _memory.ReadTags();
+        EnsureLiveTags();
 
-        RuntimeTagEntry live = _tags.FirstOrDefault(tag =>
-                tag.Index == weapon.WeaponTag.Index &&
-                string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase) &&
-                tag.DataAddress > 0)
-            ?? weapon.WeaponTag;
+        RuntimeTagEntry? live = RuntimeTagMemoryService.FindLoadedTag(
+            _tags,
+            weapon.WeaponTag);
+        if (live is null)
+            return [];
         IReadOnlyList<RuntimeTagFieldValue> root;
         try
         {
@@ -1084,13 +1089,10 @@ public sealed class EnemySpawnerService : IDisposable
         AiWeaponChoice weapon,
         WeaponModelVariant variant)
     {
-        if (_tags.Count == 0)
-            _tags = _memory.ReadTags();
-        RuntimeTagEntry? live = _tags.FirstOrDefault(tag =>
-                tag.Index == weapon.WeaponTag.Index &&
-                string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase) &&
-                tag.DataAddress > 0)
-            ?? (weapon.WeaponTag.DataAddress > 0 ? weapon.WeaponTag : null);
+        EnsureLiveTags();
+        RuntimeTagEntry? live = RuntimeTagMemoryService.FindLoadedTag(
+            _tags,
+            weapon.WeaponTag);
         if (live is null)
             return null;
 
@@ -1118,7 +1120,7 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             return [choice];
-        _tags = _memory.ReadTags();
+        EnsureLiveTags();
         string family = CharacterFamily(choice.CharacterTag.Name);
         EnemySpawnChoice[] choices = _tags
             .Where(tag =>
@@ -1147,7 +1149,7 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             return [];
-        _tags = _memory.ReadTags();
+        EnsureLiveTags();
         RuntimeTagEntry? scenario = _tags.FirstOrDefault(tag =>
             string.Equals(tag.Group, "scnr", StringComparison.OrdinalIgnoreCase) &&
             tag.DataAddress > 0);
@@ -1230,11 +1232,9 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             throw new InvalidOperationException("Connect to the running mission first.");
-        _tags = _memory.ReadTags();
-        RuntimeTagEntry spartan = _tags.FirstOrDefault(tag =>
-                tag.Index == armor.BipedTag.Index &&
-                string.Equals(tag.Group, "bipd", StringComparison.OrdinalIgnoreCase) &&
-                tag.DataAddress > 0)
+        EnsureLiveTags();
+        weapon = RelinkWeapon(weapon);
+        RuntimeTagEntry spartan = RuntimeTagMemoryService.FindLoadedTag(_tags, armor.BipedTag)
             ?? throw new InvalidOperationException(
                 "The selected Spartan biped is no longer loaded. Rescan the mission.");
         RuntimeTagEntry donor = RequireFriendlyDonorCharacter();
@@ -1278,13 +1278,10 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             throw new InvalidOperationException("Connect to the running mission first.");
-        _tags = _memory.ReadTags();
-        RuntimeTagEntry character = _tags.FirstOrDefault(tag =>
-                tag.Index == choice.CharacterTag.Index &&
-                string.Equals(tag.Group, "char", StringComparison.OrdinalIgnoreCase) &&
-                tag.DataAddress > 0)
-            ?? throw new InvalidOperationException(
-                "That character tag is no longer loaded. Rescan the mission.");
+        EnsureLiveTags();
+        choice = RelinkCharacter(choice);
+        weapon = RelinkWeapon(weapon);
+        RuntimeTagEntry character = choice.CharacterTag;
         RuntimeTagFieldValue unit = ReadRoot(character).FirstOrDefault(field =>
                 field.IsTagReference &&
                 string.Equals(
@@ -1327,11 +1324,10 @@ public sealed class EnemySpawnerService : IDisposable
     {
         if (!_memory.IsConnected)
             return null;
-        _tags = _memory.ReadTags();
-        RuntimeTagEntry? character = _tags.FirstOrDefault(tag =>
-            tag.Index == choice.CharacterTag.Index &&
-            string.Equals(tag.Group, "char", StringComparison.OrdinalIgnoreCase) &&
-            tag.DataAddress > 0);
+        EnsureLiveTags();
+        RuntimeTagEntry? character = RuntimeTagMemoryService.FindLoadedTag(
+            _tags,
+            choice.CharacterTag);
         return character is null ? null : TryReadCharacterActorType(character);
     }
 
@@ -1498,16 +1494,10 @@ public sealed class EnemySpawnerService : IDisposable
         if (!_memory.IsConnected)
             throw new InvalidOperationException("Connect to the running mission first.");
         await WarmUpAsync(cancellationToken);
-
-        RuntimeTagEntry? character = FindCachedCharacter(choice.CharacterTag);
-        if (character is null)
-        {
-            _tags = _memory.ReadTags();
-            character = FindCachedCharacter(choice.CharacterTag);
-        }
-        if (character is null)
-            throw new InvalidOperationException(
-                "That character tag is no longer loaded. Rescan the mission.");
+        EnsureLiveTags();
+        choice = RelinkCharacter(choice);
+        variant = RelinkVariant(choice, variant);
+        RuntimeTagEntry character = choice.CharacterTag;
         RuntimeTagFieldValue unit = ReadRoot(character).FirstOrDefault(field =>
                 field.IsTagReference &&
                 string.Equals(
@@ -1534,31 +1524,102 @@ public sealed class EnemySpawnerService : IDisposable
         if (!_memory.IsConnected)
             throw new InvalidOperationException("Connect to the running mission first.");
         await WarmUpAsync(cancellationToken);
-
-        RuntimeTagEntry? biped = FindCachedBiped(choice.BipedTag);
-        if (biped is null)
-        {
-            _tags = _memory.ReadTags();
-            biped = FindCachedBiped(choice.BipedTag);
-        }
-        if (biped is null)
-            throw new InvalidOperationException(
+        EnsureLiveTags();
+        RuntimeTagEntry biped = RuntimeTagMemoryService.FindLoadedTag(_tags, choice.BipedTag)
+            ?? throw new InvalidOperationException(
                 "The Spartan biped is no longer loaded. Rescan the mission.");
 
         return await SpawnVariantBodyCoreAsync(biped, variant, cancellationToken);
     }
 
-    private RuntimeTagEntry? FindCachedCharacter(RuntimeTagEntry characterTag)
-        => _tags.FirstOrDefault(tag =>
-            tag.Index == characterTag.Index &&
-            string.Equals(tag.Group, "char", StringComparison.OrdinalIgnoreCase));
+    private void EnsureLiveTags()
+    {
+        IReadOnlyList<RuntimeTagEntry> fresh =
+            _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+        if (ReferenceEquals(fresh, _tags))
+            return;
+        _tags = fresh;
+        _scaffoldIndex = null;
+    }
 
-    private RuntimeTagEntry? FindCachedBiped(RuntimeTagEntry bipedTag)
-        => _tags.FirstOrDefault(tag =>
-            tag.Index == bipedTag.Index &&
-            string.Equals(tag.Group, "bipd", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(tag.Name, bipedTag.Name, StringComparison.OrdinalIgnoreCase) &&
-            tag.DataAddress > 0);
+    private static bool SameTag(RuntimeTagEntry live, RuntimeTagEntry previous) =>
+        live.Index == previous.Index &&
+        live.Datum == previous.Datum &&
+        live.DataAddress == previous.DataAddress &&
+        live.NameAddress == previous.NameAddress;
+
+    private EnemySpawnChoice RelinkCharacter(EnemySpawnChoice choice)
+    {
+        WarmUpDefinitions();
+        RuntimeTagEntry live = RuntimeTagMemoryService.FindLoadedTag(
+                _tags,
+                choice.CharacterTag)
+            ?? throw new InvalidOperationException(
+                "That character tag is no longer loaded. Rescan the mission.");
+        if (SameTag(live, choice.CharacterTag))
+            return choice;
+        return choice with
+        {
+            CharacterTag = live,
+            Variants = ReadVariants(live),
+        };
+    }
+
+    private static SpawnVariantChoice RelinkVariant(
+        EnemySpawnChoice choice,
+        SpawnVariantChoice variant)
+    {
+        SpawnVariantChoice? match = choice.Variants.FirstOrDefault(item =>
+                item.VariantIndex == variant.VariantIndex &&
+                string.Equals(item.Name, variant.Name, StringComparison.OrdinalIgnoreCase))
+            ?? choice.Variants.FirstOrDefault(item =>
+                item.VariantIndex == variant.VariantIndex)
+            ?? choice.Variants.FirstOrDefault(item =>
+                string.Equals(item.Name, variant.Name, StringComparison.OrdinalIgnoreCase));
+        return match ?? variant;
+    }
+
+    private AiWeaponChoice? RelinkWeapon(AiWeaponChoice? weapon)
+    {
+        if (weapon is null)
+            return null;
+        RuntimeTagEntry live = RuntimeTagMemoryService.FindLoadedTag(_tags, weapon.WeaponTag)
+            ?? throw new InvalidOperationException(
+                "That weapon tag is no longer loaded. Rescan the mission.");
+        return SameTag(live, weapon.WeaponTag) ? weapon : new AiWeaponChoice(live);
+    }
+
+    private WeaponModelVariant? RelinkWeaponVariant(
+        AiWeaponChoice? weapon,
+        WeaponModelVariant? variant)
+    {
+        if (weapon is null || variant is null)
+            return variant;
+        try
+        {
+            IReadOnlyList<WeaponModelVariant> live = ReadWeaponVariants(weapon);
+            return live.FirstOrDefault(item => item.Index == variant.Index)
+                ?? live.FirstOrDefault(item => item.StringId == variant.StringId)
+                ?? variant;
+        }
+        catch (Exception)
+        {
+            return variant;
+        }
+    }
+
+    private AiWaveGroup RelinkGroup(AiWaveGroup group)
+    {
+        EnemySpawnChoice character = RelinkCharacter(group.Character);
+        AiWeaponChoice? weapon = RelinkWeapon(group.Weapon);
+        return group with
+        {
+            Character = character,
+            Variant = RelinkVariant(character, group.Variant),
+            Weapon = weapon,
+            WeaponVariant = RelinkWeaponVariant(weapon, group.WeaponVariant),
+        };
+    }
 
     private async Task<ScriptExecutionResult> SpawnVariantBodyCoreAsync(
         RuntimeTagEntry biped,
@@ -1640,6 +1701,7 @@ public sealed class EnemySpawnerService : IDisposable
     /// </summary>
     private ScaffoldIndex GetScaffoldIndex()
     {
+        EnsureLiveTags();
         RuntimeTagEntry scenario = _tags.FirstOrDefault(tag =>
             string.Equals(tag.Group, "scnr", StringComparison.OrdinalIgnoreCase) &&
             tag.DataAddress > 0)

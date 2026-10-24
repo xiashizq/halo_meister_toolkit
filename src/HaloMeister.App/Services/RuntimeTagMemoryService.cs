@@ -51,6 +51,9 @@ public sealed class RuntimeTagMemoryService : IDisposable
     private long _tagCacheScenarioEntry;
     private long _tagCacheScenarioName;
     private uint _tagCacheScenarioDataOffset;
+    private int _tagEpoch;
+    private long _scenarioRoot;
+    private bool _scenarioRootObserved;
     private Dictionary<uint, string>? _stringIdNameCache;
     private DateTimeOffset _stringIdNameCacheExpires;
     private readonly object _sessionGate = new();
@@ -58,6 +61,12 @@ public sealed class RuntimeTagMemoryService : IDisposable
     public static RuntimeTagMemoryService Current { get; } = new();
 
     public event EventHandler? ConnectionChanged;
+
+    /// <summary>
+    /// Raised after a level load replaces the tag table or the active scenario.
+    /// Cached tag addresses from the previous mission must not be written back.
+    /// </summary>
+    public event EventHandler? LiveWorldChanged;
 
     public bool IsConnected
     {
@@ -81,6 +90,98 @@ public sealed class RuntimeTagMemoryService : IDisposable
     public long ModuleBase => _moduleBase;
     public string? ModulePath => _modulePath;
     public string? BuildProfileId => _buildProfile?.Id;
+
+    /// <summary>
+    /// Changes when the connected game loads a different mission. Reading this
+    /// adopts the new tag table instead of failing until the app restarts.
+    /// </summary>
+    public int TagEpoch
+    {
+        get
+        {
+            bool changed;
+            int epoch;
+            lock (_sessionGate)
+            {
+                if (!IsSessionAlive())
+                    return _tagEpoch;
+                changed = AdoptLiveWorld();
+                epoch = _tagEpoch;
+            }
+
+            if (changed)
+                NotifyLiveWorldChanged();
+            return epoch;
+        }
+    }
+
+    /// <summary>
+    /// Returns <paramref name="tags"/> when it was read for the current mission.
+    /// After a level change, reads the live tag table and updates
+    /// <paramref name="observedEpoch"/>.
+    /// </summary>
+    public IReadOnlyList<RuntimeTagEntry> ReadTagsIfStale(
+        ref int observedEpoch,
+        IReadOnlyList<RuntimeTagEntry> tags)
+    {
+        int epoch = TagEpoch;
+        if (tags.Count > 0 && observedEpoch == epoch)
+            return tags;
+
+        IReadOnlyList<RuntimeTagEntry> fresh = ReadTags();
+        observedEpoch = TagEpoch;
+        return fresh;
+    }
+
+    /// <summary>
+    /// False when the loaded mission changed since <paramref name="observedEpoch"/>.
+    /// The observed epoch is updated either way. Callers drop addresses captured
+    /// from the previous mission instead of writing them into the new one.
+    /// </summary>
+    public bool StillSameMission(ref int observedEpoch)
+    {
+        int epoch = TagEpoch;
+        if (observedEpoch == epoch)
+            return true;
+        observedEpoch = epoch;
+        return false;
+    }
+
+    /// <summary>
+    /// Finds a tag that is loaded in <paramref name="tags"/>. Prefers the previous
+    /// index when that slot still has the same path, otherwise the same group and path.
+    /// </summary>
+    public static RuntimeTagEntry? FindLoadedTag(
+        IReadOnlyList<RuntimeTagEntry> tags,
+        RuntimeTagEntry previous)
+        => FindLoadedTag(tags, previous.Group, previous.Name, previous.Index);
+
+    public static RuntimeTagEntry? FindLoadedTag(
+        IReadOnlyList<RuntimeTagEntry> tags,
+        string group,
+        string name,
+        int preferredIndex)
+    {
+        if (string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(name))
+            return null;
+
+        RuntimeTagEntry? named = null;
+        foreach (RuntimeTagEntry tag in tags)
+        {
+            if (tag.DataAddress <= 0 ||
+                !string.Equals(tag.Group, group, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(tag.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (tag.Index == preferredIndex)
+                return tag;
+            named ??= tag;
+        }
+
+        return named;
+    }
 
     public void Connect()
     {
@@ -362,7 +463,15 @@ public sealed class RuntimeTagMemoryService : IDisposable
     public IReadOnlyList<RuntimeTagEntry> ReadTags()
     {
         EnsureConnected();
-        EnsureRuntimeIdentity();
+        try
+        {
+            EnsureRuntimeIdentity();
+        }
+        catch (LiveLevelChangedException)
+        {
+            // AdoptLiveWorld already switched this session onto the new mission.
+        }
+
         if (TagCacheStillValid())
             return _tagCache!;
 
@@ -951,6 +1060,9 @@ public sealed class RuntimeTagMemoryService : IDisposable
             ClearTagCache();
             _stringIdNameCache = null;
             _stringIdNameCacheExpires = default;
+            _scenarioRoot = 0;
+            _scenarioRootObserved = false;
+            _tagEpoch++;
         }
 
         try
@@ -1158,23 +1270,91 @@ public sealed class RuntimeTagMemoryService : IDisposable
 
     private void EnsureRuntimeIdentity()
     {
-        RuntimeIdentity expected = _identity
-            ?? throw new InvalidOperationException("No runtime identity is active.");
-        if (_process is null || _process.Id != expected.ProcessId ||
-            _process.StartTime.ToUniversalTime().Ticks != expected.ProcessStartTimeTicks ||
-            _moduleBase != expected.ModuleBase)
+        bool changed;
+        lock (_sessionGate)
         {
-            throw new InvalidOperationException(
-                "The game process identity changed; reconnect before writing live tags.");
+            RuntimeIdentity expected = _identity
+                ?? throw new InvalidOperationException("No runtime identity is active.");
+            if (_process is null || _process.Id != expected.ProcessId ||
+                _process.StartTime.ToUniversalTime().Ticks != expected.ProcessStartTimeTicks ||
+                _moduleBase != expected.ModuleBase)
+            {
+                throw new InvalidOperationException(
+                    "The game process identity changed; reconnect before writing live tags.");
+            }
+
+            changed = AdoptLiveWorld();
         }
 
+        if (changed)
+        {
+            NotifyLiveWorldChanged();
+            throw new LiveLevelChangedException();
+        }
+    }
+
+    /// <summary>
+    /// Adopts a new tag table or scenario root inside an already connected
+    /// process. Returns true when cached tag addresses from the previous
+    /// mission were dropped. Caller holds <see cref="_sessionGate"/>.
+    /// </summary>
+    private bool AdoptLiveWorld()
+    {
+        if (_identity is null)
+            return false;
+
+        bool changed = false;
         long currentTable = checked((long)ReadUInt64(
             _moduleBase + BuildProfile.TagTablePointerOffset));
-        if (currentTable != expected.TagTable)
+        if (currentTable != _identity.TagTable)
         {
-            ClearTagCache();
-            throw new InvalidOperationException(
-                "The runtime tag table changed; reconnect before using cached tag addresses.");
+            ValidateTagTable(currentTable);
+            _identity = _identity with { TagTable = currentTable };
+            changed = true;
+        }
+
+        long scenarioRoot = ReadScenarioRoot();
+        if (_scenarioRootObserved && scenarioRoot != _scenarioRoot)
+            changed = true;
+        _scenarioRoot = scenarioRoot;
+        _scenarioRootObserved = true;
+
+        if (!changed && _tagCache is not null && !TagCacheStillValid())
+            changed = true;
+        if (!changed)
+            return false;
+
+        ClearTagCache();
+        _stringIdNameCache = null;
+        _stringIdNameCacheExpires = default;
+        _tagEpoch++;
+        return true;
+    }
+
+    private long ReadScenarioRoot()
+    {
+        long rva = BuildProfile.ScenarioRootPointerRva;
+        if (rva <= 0 || _moduleBase == 0)
+            return 0;
+        try
+        {
+            return checked((long)ReadUInt64(_moduleBase + rva));
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private void NotifyLiveWorldChanged()
+    {
+        try
+        {
+            LiveWorldChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception)
+        {
+            // A page refresh must not block the session from adopting the new mission.
         }
     }
 
@@ -1282,3 +1462,16 @@ public sealed class RuntimeTagMemoryService : IDisposable
 }
 
 public sealed record RuntimeMemoryWrite(long Address, byte[] Expected, byte[] Value);
+
+/// <summary>
+/// The connected game loaded another mission. The in-flight write is refused
+/// because its addresses came from the previous mission. The session itself
+/// has already adopted the new tag table, so the next read succeeds.
+/// </summary>
+public sealed class LiveLevelChangedException : InvalidOperationException
+{
+    public LiveLevelChangedException()
+        : base("The loaded mission changed after the scan. Refresh and try again.")
+    {
+    }
+}

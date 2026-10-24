@@ -20,6 +20,7 @@ internal sealed record GameBuildProfile(
     long StringIdStringsRva,
     long StringIdCountRva,
     long StringIdBuiltinTableRva,
+    long ScenarioRootPointerRva,
     IReadOnlyDictionary<LiveToolCapability, CapabilityValidationLevel> Capabilities);
 
 internal static class GameBuildProfileCatalog
@@ -164,8 +165,32 @@ internal static class GameBuildProfileCatalog
                 checked((long)ParseHex(anchors.GetProperty("stringIdStrings"))),
                 checked((long)ParseHex(anchors.GetProperty("stringIdCount"))),
                 checked((long)ParseHex(anchors.GetProperty("stringIdBuiltinTable"))),
+                anchors.TryGetProperty("scenarioGlobal", out JsonElement scenarioGlobal)
+                    ? checked((long)ParseHex(scenarioGlobal))
+                    : 0,
                 capabilities));
         }
+
+        var byId = profiles.ToDictionary(
+            profile => profile.Id,
+            StringComparer.OrdinalIgnoreCase);
+        for (int index = 0; index < profiles.Count; index++)
+        {
+            GameBuildProfile profile = profiles[index];
+            if (profile.ScenarioRootPointerRva != 0 ||
+                string.IsNullOrWhiteSpace(profile.NativeLayout) ||
+                !byId.TryGetValue(profile.NativeLayout, out GameBuildProfile? donor) ||
+                donor.ScenarioRootPointerRva == 0)
+            {
+                continue;
+            }
+
+            profiles[index] = profile with
+            {
+                ScenarioRootPointerRva = donor.ScenarioRootPointerRva,
+            };
+        }
+
         return profiles;
     }
 

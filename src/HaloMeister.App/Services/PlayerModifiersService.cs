@@ -44,6 +44,7 @@ public sealed class PlayerModifiersService
     private readonly Dictionary<string, ModifierSnapshot> _snapshots =
         new(StringComparer.Ordinal);
     private int _processId;
+    private int _missionEpoch = -1;
 
     public static PlayerModifiersService Current { get; } = new();
 
@@ -201,6 +202,8 @@ public sealed class PlayerModifiersService
             ?? throw new ArgumentOutOfRangeException(nameof(name));
         if (!definition.Options.Any(option => option.Value == value))
             throw new ArgumentOutOfRangeException(nameof(value));
+        if (!_memory.StillSameMission(ref _missionEpoch))
+            _snapshots.Clear();
 
         IReadOnlyDictionary<string, RuntimeTagFieldValue> fields = ResolveFields();
         RuntimeTagFieldValue field = fields[name];
@@ -219,6 +222,11 @@ public sealed class PlayerModifiersService
     public int Restore()
     {
         EnsureConnected();
+        if (!_memory.StillSameMission(ref _missionEpoch))
+        {
+            _snapshots.Clear();
+            return 0;
+        }
         if (_processId != _memory.ProcessId)
         {
             _snapshots.Clear();

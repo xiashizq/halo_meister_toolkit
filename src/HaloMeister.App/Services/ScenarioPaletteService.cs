@@ -125,6 +125,7 @@ public sealed class ScenarioPaletteService(RuntimeTagMemoryService memory)
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly Dictionary<int, IReadOnlyList<RuntimeTagFieldValue>> _roots = [];
+    private int _rootsEpoch = -1;
     // The page is recreated when the language changes. Keep the session log
     // outside that instance so placed objects stay recorded.
     private static readonly object PlacedGate = new();
@@ -221,7 +222,7 @@ public sealed class ScenarioPaletteService(RuntimeTagMemoryService memory)
 
         ScriptExecutionResult result = await _bridge.ExecuteAsync(
             ScriptLanguage.BlamSpawn,
-            entry.Datum.ToString("X8"),
+            ResolvePlacementDatum(entry).ToString("X8"),
             TimeSpan.FromSeconds(15),
             cancellationToken);
         if (result.Outcome == ScriptOutcome.Failed)
@@ -283,7 +284,7 @@ public sealed class ScenarioPaletteService(RuntimeTagMemoryService memory)
 
         string payload = string.Join(
             ',',
-            entry.Datum.ToString("X8"),
+            ResolvePlacementDatum(entry).ToString("X8"),
             pose.X.ToString("0.########", CultureInfo.InvariantCulture),
             pose.Y.ToString("0.########", CultureInfo.InvariantCulture),
             pose.Z.ToString("0.########", CultureInfo.InvariantCulture),
@@ -635,8 +636,26 @@ public sealed class ScenarioPaletteService(RuntimeTagMemoryService memory)
         return new LoadedBlock(field.ChildAddress, field.ChildCount);
     }
 
+    private uint ResolvePlacementDatum(ScenarioPaletteEntry entry)
+    {
+        RuntimeTagEntry? live = RuntimeTagMemoryService.FindLoadedTag(
+            _memory.ReadTags(),
+            entry.TagGroup,
+            entry.TagPath,
+            preferredIndex: -1);
+        if (live is null)
+        {
+            throw new InvalidOperationException(
+                L.Format("scenario_palette.error_unloaded", entry.Title));
+        }
+
+        return RuntimeTagMemoryService.BuildRuntimeDatum(live);
+    }
+
     private IReadOnlyList<RuntimeTagFieldValue> Root(RuntimeTagEntry tag)
     {
+        if (!_memory.StillSameMission(ref _rootsEpoch))
+            _roots.Clear();
         if (_roots.TryGetValue(tag.Index, out IReadOnlyList<RuntimeTagFieldValue>? cached))
             return cached;
         IReadOnlyList<RuntimeTagFieldValue> root = _definitions.ReadRootFields(

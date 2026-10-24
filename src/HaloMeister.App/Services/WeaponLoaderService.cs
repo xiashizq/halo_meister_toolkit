@@ -100,6 +100,7 @@ public sealed class WeaponLoaderService : IDisposable
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private IReadOnlyList<RuntimeTagEntry> _tags = [];
+    private int _tagsEpoch = -1;
     private int _warmedProcessId;
 
     public int ProcessId => _memory.ProcessId;
@@ -146,13 +147,9 @@ public sealed class WeaponLoaderService : IDisposable
 
         // Move one-time native hook install off the first pickup click.
         await WarmUpAsync(cancellationToken);
+        EnsureLiveTags();
 
-        RuntimeTagEntry live = _tags.FirstOrDefault(tag =>
-                tag.Index == selected.Tag.Index &&
-                string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(tag.Name, selected.Tag.Name, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException(
-                "That weapon tag is no longer loaded. Refresh and select it again.");
+        RuntimeTagEntry live = FindLiveWeapon(selected);
         uint datum = RuntimeTagMemoryService.BuildRuntimeDatum(live);
         ScriptExecutionResult result = await _bridge.ExecuteAsync(
             ScriptLanguage.BlamWeaponLoad,
@@ -707,13 +704,18 @@ public sealed class WeaponLoaderService : IDisposable
         return (path >= 0 ? value[(path + 1)..] : value).Trim();
     }
 
-    private RuntimeTagEntry FindLiveWeapon(LoadableWeapon selected) =>
-        _tags.FirstOrDefault(tag =>
-                tag.Index == selected.Tag.Index &&
-                string.Equals(tag.Group, "weap", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(tag.Name, selected.Tag.Name, StringComparison.OrdinalIgnoreCase))
+    private void EnsureLiveTags()
+    {
+        _tags = _memory.ReadTagsIfStale(ref _tagsEpoch, _tags);
+    }
+
+    private RuntimeTagEntry FindLiveWeapon(LoadableWeapon selected)
+    {
+        EnsureLiveTags();
+        return RuntimeTagMemoryService.FindLoadedTag(_tags, selected.Tag)
             ?? throw new InvalidOperationException(
                 "That weapon tag is no longer loaded. Refresh and select it again.");
+    }
 
     private static string NormalizeWeaponSelector(string value) =>
         new(value

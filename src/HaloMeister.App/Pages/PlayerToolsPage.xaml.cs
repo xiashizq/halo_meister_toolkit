@@ -348,6 +348,7 @@ public sealed partial class PlayerToolsPage : Page, IActivatablePage
         }
         await RunBusy(async () =>
         {
+            _playerTagIndex = await _tools.ReadActivePlayerTagIndexAsync();
             PlayerCameraPatchResult result = await ApplyCameraAndReloadAsync(
                 () => _camera.ApplyPreset(_playerTagIndex, preset));
             SummaryText.Text = result.Description;
@@ -373,6 +374,7 @@ public sealed partial class PlayerToolsPage : Page, IActivatablePage
         }
         await RunBusy(async () =>
         {
+            _playerTagIndex = await _tools.ReadActivePlayerTagIndexAsync();
             PlayerCameraPatchResult result = await ApplyCameraAndReloadAsync(
                 () => _camera.ApplyCustom(_playerTagIndex, x, y, z, fov));
             SummaryText.Text = result.Description;

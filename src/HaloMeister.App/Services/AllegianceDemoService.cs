@@ -52,6 +52,7 @@ public sealed class AllegianceDemoService
     private readonly EnemySpawnerService _spawner = new();
     private readonly object _combatLock = new();
     private readonly List<TrackedBot> _trackedBots = [];
+    private int _missionEpoch = -1;
     private AllegianceBotRecallSettings _recallSettings =
         AllegianceBotRecallSettings.Load();
 
@@ -211,6 +212,7 @@ public sealed class AllegianceDemoService
             throw new ArgumentOutOfRangeException(nameof(campaignTeam));
         if (count is < 1 or > 5)
             throw new ArgumentOutOfRangeException(nameof(count));
+        DropTrackedBotsIfMissionChanged();
 
         // Friendly prefers an ally scaffold. Only dedicated hm_ally joins the
         // player fireteam so they follow; borrowed mission squads do not.
@@ -262,6 +264,7 @@ public sealed class AllegianceDemoService
         CancellationToken cancellationToken = default)
     {
         EnsureBridgeReady();
+        DropTrackedBotsIfMissionChanged();
         if (roster.Count == 0)
             throw new InvalidOperationException("Add at least one squad member first.");
 
@@ -367,6 +370,14 @@ public sealed class AllegianceDemoService
             _trackedBots.Clear();
     }
 
+    private void DropTrackedBotsIfMissionChanged()
+    {
+        if (RuntimeTagMemoryService.Current.StillSameMission(ref _missionEpoch))
+            return;
+        lock (_combatLock)
+            _trackedBots.Clear();
+    }
+
     private void TrackSpawnedBots(IReadOnlyList<int> actors, bool friendly)
     {
         if (actors.Count == 0)
@@ -389,6 +400,7 @@ public sealed class AllegianceDemoService
     public async Task<BotRecallResult> RecallBotsAsync(
         CancellationToken cancellationToken = default)
     {
+        DropTrackedBotsIfMissionChanged();
         AllegianceBotRecallSettings settings = RecallSettings;
 
         List<TrackedBot> candidates;

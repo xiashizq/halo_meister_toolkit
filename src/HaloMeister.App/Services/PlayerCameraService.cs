@@ -37,6 +37,7 @@ public sealed class PlayerCameraService
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly Dictionary<long, MemoryPatch> _patches = [];
     private int _processId;
+    private int _missionEpoch = -1;
 
     public static PlayerCameraService Current { get; } = new();
     public bool IsActive => _patches.Count > 0;
@@ -85,14 +86,16 @@ public sealed class PlayerCameraService
         ArgumentNullException.ThrowIfNull(preset);
         EnsureConnected();
         EnsureDefinitions();
+        DropPatchesFromPreviousMission();
         ResetForNewProcess();
         RestoreInternal();
 
         IReadOnlyList<RuntimeTagEntry> tags = _memory.ReadTags();
         RuntimeTagEntry player = FindPlayer(tags, playerTagIndex);
-        RuntimeTagEntry donor = tags.FirstOrDefault(tag =>
-                tag.Index == preset.UnitTag.Index && IsUsableUnit(tag))
-            ?? throw new InvalidOperationException(
+        RuntimeTagEntry donor = RuntimeTagMemoryService.FindLoadedTag(tags, preset.UnitTag) is { } live &&
+                                IsUsableUnit(live)
+            ? live
+            : throw new InvalidOperationException(
                 "That camera preset is no longer loaded. Refresh the preset list.");
         long playerCamera = FindCameraBase(player);
         long donorCamera = FindCameraBase(donor);
@@ -125,6 +128,7 @@ public sealed class PlayerCameraService
 
         EnsureConnected();
         EnsureDefinitions();
+        DropPatchesFromPreviousMission();
         ResetForNewProcess();
         RestoreInternal();
 
@@ -166,8 +170,16 @@ public sealed class PlayerCameraService
     public int Restore()
     {
         EnsureConnected();
+        DropPatchesFromPreviousMission();
         ResetForNewProcess();
         return RestoreInternal();
+    }
+
+    private void DropPatchesFromPreviousMission()
+    {
+        if (_memory.StillSameMission(ref _missionEpoch))
+            return;
+        _patches.Clear();
     }
 
     private CustomPlayerCamera ReadCustomCamera(

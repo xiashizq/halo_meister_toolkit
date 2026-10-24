@@ -125,6 +125,7 @@ public sealed class ScenarioPropsService(RuntimeTagMemoryService memory)
     private readonly ScriptingBridgeService _bridge = ScriptingBridgeService.Current;
     private readonly RuntimeTagDefinitionService _definitions = new();
     private readonly Dictionary<int, IReadOnlyList<RuntimeTagFieldValue>> _roots = [];
+    private int _rootsEpoch = -1;
     private readonly Dictionary<(int TagIndex, string Definition, int Index), (string Path, string Group)> _palettes = [];
 
     public ScenarioPropsSession Scan()
@@ -533,6 +534,8 @@ public sealed class ScenarioPropsService(RuntimeTagMemoryService memory)
 
     private IReadOnlyList<RuntimeTagFieldValue> Root(RuntimeTagEntry tag)
     {
+        if (!_memory.StillSameMission(ref _rootsEpoch))
+            _roots.Clear();
         if (_roots.TryGetValue(tag.Index, out IReadOnlyList<RuntimeTagFieldValue>? cached))
             return cached;
         IReadOnlyList<RuntimeTagFieldValue> root = _definitions.ReadRootFields(

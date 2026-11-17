@@ -14,7 +14,7 @@ public sealed record ReleaseUpdateResult(
 public sealed class ReleaseUpdateService
 {
     private const string LatestReleaseApi =
-        "https://api.github.com/repos/NicmeisteR/halo-meister/releases/latest";
+        "https://api.github.com/repos/xiashizq/halo_meister_toolkit/releases/latest";
     private static readonly HttpClient Http = CreateClient();
     private readonly SemaphoreSlim _checkGate = new(1, 1);
     private ReleaseUpdateResult? _cachedResult;
@@ -85,7 +85,7 @@ public sealed class ReleaseUpdateService
         client.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            $"CartographerToolkit/{ReadCurrentVersion()} (+https://github.com/NicmeisteR/halo-meister)");
+            $"CartographerToolkit/{ReadCurrentVersion()} (+https://github.com/xiashizq/halo_meister_toolkit)");
         client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
         return client;
     }

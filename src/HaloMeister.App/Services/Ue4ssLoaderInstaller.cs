@@ -320,7 +320,7 @@ public sealed class Ue4ssLoaderInstaller
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
             $"CartographerToolkit/{ReleaseUpdateService.Current.CurrentVersion} " +
-            "(+https://github.com/NicmeisteR/halo-meister)");
+            "(+https://github.com/xiashizq/halo_meister_toolkit)");
         return client;
     }
 

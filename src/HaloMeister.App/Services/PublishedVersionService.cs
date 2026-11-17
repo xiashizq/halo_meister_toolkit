@@ -23,7 +23,7 @@ public sealed class PublishedVersionService
 {
     public const string ManifestUrl = "https://halomisterversion.halomod.com/version.json";
     public const string GitHubManifestUrl =
-        "https://raw.githubusercontent.com/xiashizq/halo-meister/master/version.json";
+        "https://raw.githubusercontent.com/xiashizq/halo_meister_toolkit/master/version.json";
 
     private static readonly string[] ManifestUrls = [ManifestUrl, GitHubManifestUrl];
 

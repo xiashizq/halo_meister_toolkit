@@ -62,7 +62,7 @@ Do not port-forward the phone remote or expose it to an untrusted network.
 ## Download and first run
 
 1. Download `CartographerToolkit-<version>-win-x64.zip` and its `.sha256` file from
-   [Releases](https://github.com/NicmeisteR/halo-meister/releases).
+   [Releases](https://github.com/xiashizq/halo_meister_toolkit/releases).
 2. Extract the complete ZIP. Keep `Assets` and the runtime files beside
    `CartographerToolkit.exe`.
 3. Run `CartographerToolkit.exe`.
@@ -167,8 +167,8 @@ Developer builds require Windows and the .NET 10 SDK. NuGet restore supplies the
 Windows App SDK dependency.
 
 ```cmd
-git clone https://github.com/NicmeisteR/halo-meister.git
-cd halo-meister
+git clone https://github.com/xiashizq/halo_meister_toolkit.git
+cd halo_meister_toolkit
 
 :: Build the solution
 build.cmd
@@ -214,7 +214,7 @@ Useful technical notes:
 
 ## Reporting issues and contributing
 
-Use [GitHub Issues](https://github.com/NicmeisteR/halo-meister/issues) for
+Use [GitHub Issues](https://github.com/xiashizq/halo_meister_toolkit/issues) for
 reproducible bugs and focused feature requests. A useful report includes:
 
 - Cartographer Toolkit version and whether it is a packaged or developer build.

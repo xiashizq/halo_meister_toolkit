@@ -70,7 +70,7 @@
                             HorizontalAlignment="Left"
                             Click="OnOpenLink"
                             Content="{i18n:Loc Key='community.open_the_repository'}"
-                            Tag="https://github.com/xiashizq/halo-meister" />
+                            Tag="https://github.com/xiashizq/halo_meister_toolkit" />
                     </StackPanel>
                 </Border>
             </Grid>
